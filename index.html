@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paper-Ink Watch Manager</title>
+  <style>
+    :root { --bg: #f4f6f8; --card: #ffffff; --primary: #10b981; --danger: #ef4444; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); margin: 0; padding: 20px; }
+    .container { max-width: 480px; margin: 0 auto; background: var(--card); border-radius: 16px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    h1 { font-size: 1.4rem; margin-top: 0; display: flex; justify-content: space-between; align-items: center; }
+    .status-badge { font-size: 0.75rem; padding: 4px 10px; border-radius: 12px; background: #e5e7eb; color: #374151; }
+    .status-badge.connected { background: #d1fae5; color: #065f46; }
+    button { cursor: pointer; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 600; background: #2563eb; color: white; transition: 0.2s; }
+    button:hover { opacity: 0.9; }
+    .btn-connect { width: 100%; margin-bottom: 20px; font-size: 1rem; padding: 12px; }
+    .todo-list { list-style: none; padding: 0; margin: 0; }
+    .todo-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f3f4f6; }
+    .todo-item input[type="text"] { flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; }
+    .todo-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary); }
+    .btn-del { background: var(--danger); padding: 6px 10px; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>
+      ⌚ Paper-Ink Watch
+      <span id="status" class="status-badge">Disconnected</span>
+    </h1>
+    <button id="connectBtn" class="btn-connect" onclick="connectBLE()">Connect Watch via BLE</button>
+
+    <h3>Daily To-Dos (Max 7)</h3>
+    <ul id="todoContainer" class="todo-list"></ul>
+    <button onclick="addTodo()" style="margin-top: 15px; background: #4b5563;">+ Add Task</button>
+  </div>
+
+  <script>
+    const SERVICE_UUID   = "12345678-1234-1234-1234-123456789abc";
+    const CHAR_TIME_UUID = "12345678-1234-1234-1234-123456789ab1";
+    const CHAR_TODO_UUID = "12345678-1234-1234-1234-123456789ab2";
+
+    let bleDevice, gattServer, todoChar, timeChar;
+    let todos = JSON.parse(localStorage.getItem('watch_todos') || '[]');
+
+    function renderUI() {
+      const container = document.getElementById('todoContainer');
+      container.innerHTML = '';
+      todos.forEach((todo, idx) => {
+        const li = document.createElement('li');
+        li.className = 'todo-item';
+        li.innerHTML = `
+          <input type="checkbox" ${todo.completed ? 'checked' : ''} onchange="toggleTodo(${idx})">
+          <input type="text" value="${todo.text}" maxlength="27" onchange="updateText(${idx}, this.value)">
+          <button class="btn-del" onclick="deleteTodo(${idx})">✕</button>
+        `;
+        container.appendChild(li);
+      });
+      localStorage.setItem('watch_todos', JSON.stringify(todos));
+    }
+
+    async function connectBLE() {
+      try {
+        document.getElementById('status').innerText = 'Searching...';
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'PaperInk-Watch' }],
+          optionalServices: [SERVICE_UUID]
+        });
+
+        gattServer = await bleDevice.gatt.connect();
+        const service = await gattServer.getPrimaryService(SERVICE_UUID);
+        todoChar = await service.getCharacteristic(CHAR_TODO_UUID);
+        timeChar = await service.getCharacteristic(CHAR_TIME_UUID);
+
+        document.getElementById('status').innerText = 'Connected';
+        document.getElementById('status').classList.add('connected');
+        document.getElementById('connectBtn').innerText = 'Sync Realtime System Time';
+        document.getElementById('connectBtn').onclick = syncTime;
+
+        syncTime();
+      } catch (err) {
+        console.error(err);
+        document.getElementById('status').innerText = 'Connection Failed';
+      }
+    }
+
+    async function syncTime() {
+      if (!timeChar) return;
+      const epoch = Math.floor(Date.now() / 1000);
+      const buffer = new ArrayBuffer(4);
+      new DataView(buffer).setUint32(0, epoch, true); // Little endian
+      await timeChar.writeValue(buffer);
+      console.log('Time synchronized:', epoch);
+    }
+
+    async function sendTodoToWatch(index) {
+      if (!todoChar || !todos[index]) return;
+      const todo = todos[index];
+      const encoder = new TextEncoder();
+      const textBytes = encoder.encode(todo.text);
+      
+      // Packet format: [ID(1B), Completed(1B), Timestamp(4B), Text...]
+      const payload = new Uint8Array(6 + textBytes.length);
+      payload[0] = index;
+      payload[1] = todo.completed ? 1 : 0;
+      
+      const ts = todo.timestamp || Math.floor(Date.now() / 1000);
+      payload[2] = ts & 0xFF;
+      payload[3] = (ts >> 8) & 0xFF;
+      payload[4] = (ts >> 16) & 0xFF;
+      payload[5] = (ts >> 24) & 0xFF;
+      
+      payload.set(textBytes, 6);
+
+      // Web Bluetooth Write Characteristic -> Transmits in ~15ms
+      await todoChar.writeValue(payload);
+    }
+
+    function addTodo() {
+      if (todos.length >= 7) return alert('Maximum 7 To-Dos allowed on screen');
+      todos.push({ text: 'New Task', completed: false, timestamp: Math.floor(Date.now() / 1000) });
+      renderUI();
+      sendTodoToWatch(todos.length - 1);
+    }
+
+    function toggleTodo(idx) {
+      todos[idx].completed = !todos[idx].completed;
+      renderUI();
+      sendTodoToWatch(idx); // Trigger Realtime Watch Cross-off (<200ms)
+    }
+
+    function updateText(idx, text) {
+      todos[idx].text = text;
+      renderUI();
+      sendTodoToWatch(idx);
+    }
+
+    function deleteTodo(idx) {
+      todos.splice(idx, 1);
+      renderUI();
+      // Clear slot on watch by sending empty string payload
+      if (todoChar) {
+        const payload = new Uint8Array([idx, 0, 0, 0, 0, 0]);
+        todoChar.writeValue(payload);
+      }
+    }
+
+    renderUI();
+  </script>
+</body>
+</html>
