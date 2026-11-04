@@ -1,150 +1,548 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Paper-Ink Watch Manager</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TodoWatch Sync</title>
+  <meta name="description" content="Write up to seven todos in the browser and send them to a TodoWatch over Bluetooth.">
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%239a7b3a' stroke-width='3'/%3E%3Cpath d='M16 8v8l5 3' fill='none' stroke='%231f4a3f' stroke-width='3'/%3E%3C/svg%3E">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&display=swap" rel="stylesheet">
+
   <style>
-    :root { --bg: #f4f6f8; --card: #ffffff; --primary: #10b981; --danger: #ef4444; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); margin: 0; padding: 20px; }
-    .container { max-width: 480px; margin: 0 auto; background: var(--card); border-radius: 16px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-    h1 { font-size: 1.4rem; margin-top: 0; display: flex; justify-content: space-between; align-items: center; }
-    .status-badge { font-size: 0.75rem; padding: 4px 10px; border-radius: 12px; background: #e5e7eb; color: #374151; }
-    .status-badge.connected { background: #d1fae5; color: #065f46; }
-    button { cursor: pointer; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 600; background: #2563eb; color: white; transition: 0.2s; }
-    button:hover { opacity: 0.9; }
-    .btn-connect { width: 100%; margin-bottom: 20px; font-size: 1rem; padding: 12px; }
-    .todo-list { list-style: none; padding: 0; margin: 0; }
-    .todo-item { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f3f4f6; }
-    .todo-item input[type="text"] { flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; }
-    .todo-item input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary); }
-    .btn-del { background: var(--danger); padding: 6px 10px; font-size: 0.8rem; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>
-      ⌚ Paper-Ink Watch
-      <span id="status" class="status-badge">Disconnected</span>
-    </h1>
-    <button id="connectBtn" class="btn-connect" onclick="connectBLE()">Connect Watch via BLE</button>
+    :root {
+      --paper: #eceee9;
+      --ink: #16241f;
+      --muted: #5f6b65;
+      --line: #cfd5cc;
+      --green: #1f4a3f;
+      --brass: #8c6d2c;
+      --ok: #2f7d5b;
 
-    <h3>Daily To-Dos (Max 7)</h3>
-    <ul id="todoContainer" class="todo-list"></ul>
-    <button onclick="addTodo()" style="margin-top: 15px; background: #4b5563;">+ Add Task</button>
-  </div>
+      --serif: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+      --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  <script>
-    const SERVICE_UUID   = "12345678-1234-1234-1234-123456789abc";
-    const CHAR_TIME_UUID = "12345678-1234-1234-1234-123456789ab1";
-    const CHAR_TODO_UUID = "12345678-1234-1234-1234-123456789ab2";
-
-    let bleDevice, gattServer, todoChar, timeChar;
-    let todos = JSON.parse(localStorage.getItem('watch_todos') || '[]');
-
-    function renderUI() {
-      const container = document.getElementById('todoContainer');
-      container.innerHTML = '';
-      todos.forEach((todo, idx) => {
-        const li = document.createElement('li');
-        li.className = 'todo-item';
-        li.innerHTML = `
-          <input type="checkbox" ${todo.completed ? 'checked' : ''} onchange="toggleTodo(${idx})">
-          <input type="text" value="${todo.text}" maxlength="27" onchange="updateText(${idx}, this.value)">
-          <button class="btn-del" onclick="deleteTodo(${idx})">✕</button>
-        `;
-        container.appendChild(li);
-      });
-      localStorage.setItem('watch_todos', JSON.stringify(todos));
+      /* one radius for every control */
+      --radius: 4px;
     }
 
-    async function connectBLE() {
-      try {
-        document.getElementById('status').innerText = 'Searching...';
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'PaperInk-Watch' }],
-          optionalServices: [SERVICE_UUID]
-        });
+    * {
+      box-sizing: border-box;
+    }
 
-        gattServer = await bleDevice.gatt.connect();
-        const service = await gattServer.getPrimaryService(SERVICE_UUID);
-        todoChar = await service.getCharacteristic(CHAR_TODO_UUID);
-        timeChar = await service.getCharacteristic(CHAR_TIME_UUID);
+    body {
+      margin: 0;
+      padding: 48px 20px 64px;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.5;
+    }
 
-        document.getElementById('status').innerText = 'Connected';
-        document.getElementById('status').classList.add('connected');
-        document.getElementById('connectBtn').innerText = 'Sync Realtime System Time';
-        document.getElementById('connectBtn').onclick = syncTime;
+    .app {
+      max-width: 600px;
+      margin: 0 auto;
+    }
 
-        syncTime();
-      } catch (err) {
-        console.error(err);
-        document.getElementById('status').innerText = 'Connection Failed';
+    /* Masthead */
+    h1 {
+      margin: 0 0 6px;
+      font-family: var(--serif);
+      font-size: 44px;
+      font-weight: 500;
+      line-height: 1.05;
+      letter-spacing: -0.01em;
+    }
+
+    .tagline {
+      margin: 0 0 28px;
+      color: var(--muted);
+    }
+
+    /* Connection bar */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 20px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      padding: 8px 16px;
+      border: 1px solid var(--green);
+      border-radius: var(--radius);
+      background: var(--green);
+      color: #f4f3ee;
+      font: 500 14px var(--sans);
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--ink);
+      border-color: var(--ink);
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--brass);
+      outline-offset: 2px;
+    }
+
+    .state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    #conn::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #aab1a9;
+    }
+
+    #conn.on {
+      color: var(--ok);
+    }
+
+    #conn.on::before {
+      background: var(--ok);
+    }
+
+    /* Todo list: ruled lines on the page, no container */
+    #list {
+      border-top: 1px solid var(--ink);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 32px 1fr auto auto;
+      grid-template-areas: "idx field save done";
+      align-items: center;
+      gap: 12px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .row span.idx {
+      grid-area: idx;
+      color: var(--brass);
+      font-family: var(--serif);
+      font-size: 26px;
+      font-weight: 600;
+      line-height: 1;
+    }
+
+    .field {
+      grid-area: field;
+      min-width: 0;
+    }
+
+    input[type=text] {
+      width: 100%;
+      padding: 4px 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      font: 500 16px var(--sans);
+    }
+
+    input[type=text]::placeholder {
+      color: #8d958f;
+      font-weight: 400;
+    }
+
+    .life {
+      height: 2px;
+      margin-top: 4px;
+      background: var(--line);
+    }
+
+    .life::after {
+      content: "";
+      display: block;
+      width: calc(var(--left, 0) * 100%);
+      height: 100%;
+      background: var(--brass);
+    }
+
+    .meta {
+      display: block;
+      min-height: 18px;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .row button {
+      grid-area: save;
+      padding: 6px 14px;
+      border-color: var(--line);
+      background: transparent;
+      color: var(--green);
+    }
+
+    .row button:hover {
+      border-color: var(--green);
+      background: transparent;
+    }
+
+    .row label {
+      grid-area: done;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    input[type=checkbox] {
+      appearance: none;
+      -webkit-appearance: none;
+      position: relative;
+      width: 20px;
+      height: 20px;
+      margin: 0;
+      border: 1.5px solid var(--brass);
+      border-radius: var(--radius);
+      background: transparent;
+      cursor: pointer;
+    }
+
+    input[type=checkbox]:checked {
+      border-color: var(--green);
+      background: var(--green);
+    }
+
+    input[type=checkbox]:checked::after {
+      content: "";
+      position: absolute;
+      left: 6px;
+      top: 2px;
+      width: 5px;
+      height: 10px;
+      border: solid #f4f3ee;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+
+    input[type=checkbox]:disabled {
+      opacity: .35;
+      cursor: not-allowed;
+    }
+
+    .expired {
+      color: var(--muted);
+      text-decoration: line-through;
+    }
+
+    /* Activity log */
+    h2 {
+      margin: 32px 0 10px;
+      font-family: var(--serif);
+      font-size: 24px;
+      font-weight: 500;
+    }
+
+    #status {
+      height: 128px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+      white-space: pre-wrap;
+      overflow: auto;
+    }
+
+    #status:empty::before {
+      content: "Connection and sync events will appear here.";
+    }
+
+    /* Small screens */
+    @media (max-width: 520px) {
+      body {
+        padding: 32px 14px 48px;
       }
+
+      h1 {
+        font-size: 38px;
+      }
+
+      .row {
+        grid-template-columns: 28px 1fr auto;
+        grid-template-areas:
+          "idx field save"
+          ".   done  done";
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <h1>TodoWatch</h1>
+    <p class="tagline">Seven slots, synced to your watch. Each todo clears itself after 24 hours.</p>
+
+    <div class="toolbar">
+      <button id="connect">Connect watch</button>
+      <span id="conn" class="state">Watch not connected</span>
+      <span id="queue" class="state">Nothing waiting to sync</span>
+    </div>
+
+    <section id="list"></section>
+
+    <h2>Activity</h2>
+    <div id="status"></div>
+  </main>
+
+  <script>
+    const UUID = {
+      svc:  '7a1c0000-0000-4000-8000-00805f9b34fb',
+      time: '7a1c0001-0000-4000-8000-00805f9b34fb',
+      todo: '7a1c0002-0000-4000-8000-00805f9b34fb',
+      done: '7a1c0003-0000-4000-8000-00805f9b34fb',
+      stat: '7a1c0004-0000-4000-8000-00805f9b34fb'
+    };
+
+    const DAY = 86400;
+    const LS_KEY = 'todowatch.v1';
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const $ = id => document.getElementById(id);
+
+    let state = JSON.parse(localStorage.getItem(LS_KEY) || '{"todos":[],"queue":[]}');
+    if (state.todos.length !== 7) {
+      state.todos = Array.from({ length: 7 }, (_, i) => state.todos[i] || null);
+    }
+
+    let device = null;
+    let chars = {};
+    let connected = false;
+    let syncTimer = null;
+    let flushing = false;
+
+    // seconds
+    const tzOffset = () => -new Date().getTimezoneOffset() * 60;
+
+    // matches watch clock base
+    const localNow = () => Math.floor(Date.now() / 1000) + tzOffset();
+
+    function log(msg) {
+      $('status').textContent =
+        new Date().toLocaleTimeString() + '  ' + msg + '\n' + $('status').textContent;
+    }
+
+    function save() {
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      const n = state.queue.length;
+      $('queue').textContent = n ? n + ' waiting to sync' : 'Nothing waiting to sync';
+    }
+
+    function setConn(on) {
+      $('conn').textContent = on ? 'Watch connected' : 'Watch not connected';
+      $('conn').classList.toggle('on', on);
+    }
+
+    function timeLeftLabel(t, remaining, isExpired) {
+      if (!t) return '';
+      if (isExpired) return 'Expired';
+      if (t.done) return 'Done';
+      const h = Math.floor(remaining / 3600);
+      const m = Math.floor((remaining % 3600) / 60);
+      return h + 'h ' + m + 'm left';
+    }
+
+    function render() {
+      const list = $('list');
+      list.innerHTML = '';
+      const now = localNow();
+
+      for (let i = 0; i < 7; i++) {
+        const t = state.todos[i];
+        const isExpired = !!t && (now - t.createdAt >= DAY);
+        const remaining = t ? Math.max(0, DAY - (now - t.createdAt)) : 0;
+
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const idx = document.createElement('span');
+        idx.className = 'idx';
+        idx.textContent = (i + 1);
+
+        const field = document.createElement('div');
+        field.className = 'field';
+
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.maxLength = 40;
+        inp.value = t ? t.text : '';
+        inp.placeholder = 'Type a todo, then press Save';
+        inp.setAttribute('aria-label', 'Todo ' + (i + 1));
+        if (isExpired) inp.classList.add('expired');
+
+        const life = document.createElement('div');
+        life.className = 'life';
+        life.style.setProperty('--left', remaining / DAY);
+
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = timeLeftLabel(t, remaining, isExpired);
+
+        field.append(inp, life, meta);
+
+        const saveBtn = document.createElement('button');
+        saveBtn.textContent = 'Save';
+        saveBtn.onclick = () => setTodo(i, inp.value.trim());
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!(t && t.done);
+        cb.disabled = !t || isExpired;
+        cb.onchange = () => markDone(i, cb.checked);
+
+        const lbl = document.createElement('label');
+        lbl.append(cb, 'Done');
+
+        row.append(idx, field, saveBtn, lbl);
+        list.append(row);
+      }
+    }
+
+    function setTodo(i, text) {
+      if (!text) return;
+      state.todos[i] = { text, createdAt: localNow(), done: false };
+      state.queue.push({ op: 'set', i, text });
+      save();
+      render();
+      flush();
+    }
+
+    function markDone(i, val) {
+      if (!val) {
+        log('Un-tick is not supported on the watch; re-save the todo instead.');
+        render();
+        return;
+      }
+      if (!state.todos[i]) return;
+      state.todos[i].done = true;
+      state.queue.push({ op: 'done', i });
+      save();
+      render();
+      flush();
+    }
+
+    async function write(ch, data) {
+      const bytes = typeof data === 'string' ? enc.encode(data) : data;
+      // low latency
+      if (ch.properties.writeWithoutResponse) {
+        return ch.writeValueWithoutResponse(bytes);
+      }
+      return ch.writeValue(bytes);
     }
 
     async function syncTime() {
-      if (!timeChar) return;
-      const epoch = Math.floor(Date.now() / 1000);
-      const buffer = new ArrayBuffer(4);
-      new DataView(buffer).setUint32(0, epoch, true); // Little endian
-      await timeChar.writeValue(buffer);
-      console.log('Time synchronized:', epoch);
+      if (!connected) return;
+      const buf = new ArrayBuffer(4);
+      // little-endian
+      new DataView(buf).setUint32(0, localNow(), true);
+      await write(chars.time, new Uint8Array(buf));
     }
 
-    async function sendTodoToWatch(index) {
-      if (!todoChar || !todos[index]) return;
-      const todo = todos[index];
-      const encoder = new TextEncoder();
-      const textBytes = encoder.encode(todo.text);
-      
-      // Packet format: [ID(1B), Completed(1B), Timestamp(4B), Text...]
-      const payload = new Uint8Array(6 + textBytes.length);
-      payload[0] = index;
-      payload[1] = todo.completed ? 1 : 0;
-      
-      const ts = todo.timestamp || Math.floor(Date.now() / 1000);
-      payload[2] = ts & 0xFF;
-      payload[3] = (ts >> 8) & 0xFF;
-      payload[4] = (ts >> 16) & 0xFF;
-      payload[5] = (ts >> 24) & 0xFF;
-      
-      payload.set(textBytes, 6);
+    async function flush() {
+      if (!connected || flushing) {
+        save();
+        return;
+      }
 
-      // Web Bluetooth Write Characteristic -> Transmits in ~15ms
-      await todoChar.writeValue(payload);
-    }
-
-    function addTodo() {
-      if (todos.length >= 7) return alert('Maximum 7 To-Dos allowed on screen');
-      todos.push({ text: 'New Task', completed: false, timestamp: Math.floor(Date.now() / 1000) });
-      renderUI();
-      sendTodoToWatch(todos.length - 1);
-    }
-
-    function toggleTodo(idx) {
-      todos[idx].completed = !todos[idx].completed;
-      renderUI();
-      sendTodoToWatch(idx); // Trigger Realtime Watch Cross-off (<200ms)
-    }
-
-    function updateText(idx, text) {
-      todos[idx].text = text;
-      renderUI();
-      sendTodoToWatch(idx);
-    }
-
-    function deleteTodo(idx) {
-      todos.splice(idx, 1);
-      renderUI();
-      // Clear slot on watch by sending empty string payload
-      if (todoChar) {
-        const payload = new Uint8Array([idx, 0, 0, 0, 0, 0]);
-        todoChar.writeValue(payload);
+      flushing = true;
+      try {
+        while (state.queue.length) {
+          const op = state.queue[0];
+          if (op.op === 'set') {
+            await write(chars.todo, `${op.i}|${op.text}`);
+          }
+          if (op.op === 'done') {
+            await write(chars.done, new Uint8Array([op.i]));
+          }
+          state.queue.shift();
+          save();
+        }
+      } catch (e) {
+        log('write failed, will retry: ' + e.message);
+      } finally {
+        flushing = false;
+        save();
       }
     }
 
-    renderUI();
+    function onDisconnect() {
+      connected = false;
+      setConn(false);
+      clearInterval(syncTimer);
+      log('disconnected. Changes are queued and will sync on reconnect.');
+    }
+
+    $('connect').onclick = async () => {
+      try {
+        if (!navigator.bluetooth) {
+          throw new Error('Web Bluetooth not available (use Chrome or Edge on desktop or Android).');
+        }
+
+        if (!device) {
+          device = await navigator.bluetooth.requestDevice({
+            filters: [{ namePrefix: 'TodoWatch' }],
+            optionalServices: [UUID.svc]
+          });
+          device.addEventListener('gattserverdisconnected', onDisconnect);
+        }
+
+        const server = await device.gatt.connect();
+        const svc = await server.getPrimaryService(UUID.svc);
+        chars.time = await svc.getCharacteristic(UUID.time);
+        chars.todo = await svc.getCharacteristic(UUID.todo);
+        chars.done = await svc.getCharacteristic(UUID.done);
+        chars.stat = await svc.getCharacteristic(UUID.stat);
+
+        await chars.stat.startNotifications();
+        chars.stat.addEventListener('characteristicvaluechanged', e => {
+          const v = dec.decode(e.target.value);
+          log('watch: ' + v + (v.startsWith('410') ? ' (todo expired on watch)' : ''));
+        });
+
+        connected = true;
+        setConn(true);
+        log('connected to ' + device.name);
+
+        await syncTime();
+        await flush();
+
+        clearInterval(syncTimer);
+        syncTimer = setInterval(() => syncTime().catch(() => {}), 30000);
+      } catch (e) {
+        log('connect error: ' + e.message);
+      }
+    };
+
+    render();
+    save();
+
+    // refresh expiry state every minute
+    setInterval(render, 60000);
   </script>
 </body>
+
 </html>
